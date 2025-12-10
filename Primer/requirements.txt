@@ -1,0 +1,35 @@
+# Core web framework
+streamlit>=1.28.0
+
+# Bioinformatics and primer design
+biopython>=1.81
+primer3-py>=2.0.3
+
+# Data handling and analysis
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Excel file support
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+
+# Interactive visualizations
+plotly>=5.15.0
+
+# HTTP requests for API calls
+requests>=2.31.0
+
+# Scientific computing (dependencies for biopython)
+scipy>=1.10.0
+
+# Optional: Enhanced data processing
+xlrd>=2.0.1
+
+# Optional: Progress bars and utilities
+tqdm>=4.65.0
+
+# Optional: Configuration management
+python-dotenv>=1.0.0
+
+# Optional: Logging
+loguru>=0.7.0
