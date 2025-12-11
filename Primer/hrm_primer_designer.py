@@ -661,7 +661,8 @@ elif mode.startswith("D)"):
                     st.stop()
 
                 best_anchor = None
-                desired_anchor_tm = base_tm  # Use base_tm as target for anchor
+                # Use the assigned Tm slot for the anchor (from ladder_tms or user input)
+                desired_anchor_tm = target_desired_tms[anchor_idx]
                 for p in base_pairs_anchor:
                     tuned = optimize_pair_for_target_tm(
                         anchor_seq,
@@ -683,11 +684,9 @@ elif mode.startswith("D)"):
                 anchor_tm_actual = best_anchor["amplicon_tm"]
                 predicted_tms[anchor_idx] = anchor_tm_actual
 
-                # --- 2) Define desired Tm slots for all targets relative to the anchor ---
-                desired_tms_effective = [None] * n_targets
-                for i in range(n_targets):
-                    offset = i - anchor_idx
-                    desired_tms_effective[i] = anchor_tm_actual + offset * delta_tm
+                # --- 2) Use the original desired Tms that were shown in the UI ---
+                # These are the values from ladder_tms (if auto-assign) or user input
+                desired_tms_effective = target_desired_tms.copy()
 
                 # --- 3) Record anchor row first ---
                 all_rows.append({
