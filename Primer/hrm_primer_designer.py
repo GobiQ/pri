@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import itertools
 from typing import List, Optional, Dict, Any
 
 from Bio.Seq import Seq
@@ -615,15 +616,28 @@ elif mode.startswith("D)"):
 
     st.markdown("### Multiplex optimization options")
 
-    anchor_idx = st.selectbox(
-        "Which target is most constrained / should act as the anchor?",
-        options=list(range(n_targets)),
-        format_func=lambda i: target_names[i] if target_names[i] else f"Target {i+1}",
+    free_slot_assignment = st.checkbox(
+        "Let optimization choose which target goes to which Tm slot",
+        value=False,
         help=(
-            "The anchor target is the one whose amplicon Tm is least negotiable. "
-            "We'll design this first, then space other targets' Tm slots around its actual predicted Tm."
+            "If checked, the Tm ladder is treated as a set of slots, and the algorithm "
+            "assigns each target to the slot it can hit best, instead of locking "
+            "Target 1 → Slot 1, Target 2 → Slot 2, etc."
         ),
     )
+
+    if not free_slot_assignment:
+        anchor_idx = st.selectbox(
+            "Which target is most constrained / should act as the anchor?",
+            options=list(range(n_targets)),
+            format_func=lambda i: target_names[i] if target_names[i] else f"Target {i+1}",
+            help=(
+                "The anchor target is the one whose amplicon Tm is least negotiable. "
+                "We'll design this first, then space other targets' Tm slots around its actual predicted Tm."
+            ),
+        )
+    else:
+        anchor_idx = 0  # dummy, won't be used in free-assignment mode
 
     if st.button("Design multiplex primers", type="primary"):
         # Basic validation
@@ -635,9 +649,145 @@ elif mode.startswith("D)"):
                 all_rows = []
                 predicted_tms = [None] * n_targets
 
-                # --- 1) Anchor target first ---
-                anchor_name = target_names[anchor_idx]
-                anchor_seq = target_seqs[anchor_idx]
+                if free_slot_assignment:
+                    # --- Free slot assignment path ---
+                    slot_tms = target_desired_tms  # ladder values from UI (auto or manual)
+
+                    # Precompute best candidate for each (target, slot) pair
+                    best_for_target_slot = {}
+                    cost_matrix = {}
+
+                    for i, (name, seq) in enumerate(zip(target_names, target_seqs)):
+                        if not seq:
+                            continue
+
+                        try:
+                            base_pairs: List[PrimerPair] = designer.design_primers(
+                                seq,
+                                target_region=None,
+                                custom_params=primer3_params,
+                                add_t7_promoter=False,
+                                gene_target=f"{name} (multiplex HRM free-assign)",
+                            )
+                        except Exception as e:
+                            all_rows.append({
+                                "Target": name,
+                                "Status": f"Primer design failed: {e}",
+                            })
+                            continue
+
+                        if not base_pairs:
+                            all_rows.append({
+                                "Target": name,
+                                "Status": "No primer pairs found for this target.",
+                            })
+                            continue
+
+                        for slot_idx, slot_tm in enumerate(slot_tms):
+                            best_candidate = None
+                            for p in base_pairs:
+                                tuned = optimize_pair_for_target_tm(
+                                    seq,
+                                    p,
+                                    target_tm=slot_tm,
+                                    monovalent_mM=monovalent_mM,
+                                    free_Mg_mM=free_Mg_mM,
+                                    tail_penalty=tail_penalty,
+                                )
+                                if tuned is None:
+                                    continue
+                                if best_candidate is None or tuned["score"] < best_candidate["score"]:
+                                    best_candidate = tuned
+
+                            if best_candidate is not None:
+                                best_for_target_slot[(i, slot_idx)] = best_candidate
+                                cost_matrix[(i, slot_idx)] = best_candidate["score"]
+
+                    # Determine which targets actually have any viable slot
+                    valid_targets = sorted({
+                        i for (i, slot_idx) in best_for_target_slot.keys()
+                    })
+
+                    if not valid_targets:
+                        st.error("No viable primer/slot combinations were found. Try relaxing constraints.")
+                        st.stop()
+
+                    # Brute-force optimal assignment (targets → distinct slots)
+                    n = len(valid_targets)
+                    slot_indices = list(range(len(slot_tms)))
+                    best_perm = None
+                    best_total_cost = float("inf")
+
+                    for perm in itertools.permutations(slot_indices, n):
+                        total = 0.0
+                        feasible = True
+                        for t_idx, s_idx in zip(valid_targets, perm):
+                            if (t_idx, s_idx) not in cost_matrix:
+                                feasible = False
+                                break
+                            total += cost_matrix[(t_idx, s_idx)]
+                        if feasible and total < best_total_cost:
+                            best_total_cost = total
+                            best_perm = dict(zip(valid_targets, perm))
+
+                    if best_perm is None:
+                        st.error("Could not find a feasible assignment of targets to Tm slots.")
+                        st.stop()
+
+                    # Build results table
+                    for i in range(n_targets):
+                        name = target_names[i]
+                        seq = target_seqs[i]
+
+                        if not seq:
+                            all_rows.append({
+                                "Target": name,
+                                "Status": "No sequence provided",
+                            })
+                            continue
+
+                        slot_idx = best_perm.get(i, None)
+                        if slot_idx is None:
+                            all_rows.append({
+                                "Target": name,
+                                "Status": "Not assigned to any Tm slot (no viable design).",
+                            })
+                            continue
+
+                        candidate = best_for_target_slot.get((i, slot_idx))
+                        if candidate is None:
+                            all_rows.append({
+                                "Target": name,
+                                "Status": "Internal error: assignment has no candidate.",
+                            })
+                            continue
+
+                        assigned_tm = slot_tms[slot_idx]
+                        predicted_tms[i] = candidate["amplicon_tm"]
+
+                        all_rows.append({
+                            "Target": name,
+                            "Assigned Tm slot (°C)": round(assigned_tm, 2),
+                            "Predicted HRM Tm (°C)": round(candidate["amplicon_tm"], 2),
+                            "ΔTm (predicted − slot, °C)": round(candidate["amplicon_tm"] - assigned_tm, 2),
+                            "Forward primer (with tail)": candidate["forward_with_tail"],
+                            "Reverse primer (with tail)": candidate["reverse_with_tail"],
+                            "5' tail F": candidate["tails"][0],
+                            "5' tail R": candidate["tails"][1],
+                            "Product size (bp)": candidate["product_size"],
+                            "Primer Tm F (°C)": round(candidate["forward_tm"], 2),
+                            "Primer Tm R (°C)": round(candidate["reverse_tm"], 2),
+                            "GC% F": round(candidate["gc_f"], 1),
+                            "GC% R": round(candidate["gc_r"], 1),
+                            "Primer3 penalty": round(candidate["penalty"], 3),
+                            "Status": "Assigned",
+                        })
+
+                else:
+                    # --- Fixed assignment path (original anchor-first logic) ---
+                    # --- 1) Anchor target first ---
+                    anchor_name = target_names[anchor_idx]
+                    anchor_seq = target_seqs[anchor_idx]
 
                 if not anchor_seq:
                     st.error("The chosen anchor target has no sequence; please provide it.")
@@ -791,32 +941,62 @@ elif mode.startswith("D)"):
                         "Status": "OK",
                     })
 
-                # Display table
-                df = pd.DataFrame(all_rows)
+                # Display table (for both paths)
+                if not free_slot_assignment:
+                    df = pd.DataFrame(all_rows)
 
-                # Try to sort by predicted HRM Tm if available
-                if "Predicted HRM Tm (°C)" in df.columns:
-                    df = df.sort_values("Predicted HRM Tm (°C)", na_position="last")
+                    # Try to sort by predicted HRM Tm if available
+                    if "Predicted HRM Tm (°C)" in df.columns:
+                        df = df.sort_values("Predicted HRM Tm (°C)", na_position="last")
 
-                st.dataframe(df, use_container_width=True)
+                    st.dataframe(df, use_container_width=True)
 
-                # Report minimal spacing between peaks if we have predictions
-                predicted_tms_clean = sorted([tm for tm in predicted_tms if tm is not None])
-                if len(predicted_tms_clean) >= 2:
-                    diffs = [
-                        predicted_tms_clean[i+1] - predicted_tms_clean[i]
-                        for i in range(len(predicted_tms_clean) - 1)
-                    ]
-                    min_sep = min(diffs)
-                    st.info(
-                        f"Minimum predicted peak separation: **{min_sep:.2f} °C** "
-                        f"(desired: {delta_tm:.2f} °C)."
-                    )
-                    if min_sep < (delta_tm * 0.7):
-                        st.warning(
-                            "Some peaks are predicted to be closer together than desired. "
-                            "You may want to increase ΔTm, adjust primer constraints, or try different targets."
+                    # Report minimal spacing between peaks if we have predictions
+                    predicted_tms_clean = sorted([tm for tm in predicted_tms if tm is not None])
+                    if len(predicted_tms_clean) >= 2:
+                        diffs = [
+                            predicted_tms_clean[i+1] - predicted_tms_clean[i]
+                            for i in range(len(predicted_tms_clean) - 1)
+                        ]
+                        min_sep = min(diffs)
+                        st.info(
+                            f"Minimum predicted peak separation: **{min_sep:.2f} °C** "
+                            f"(desired: {delta_tm:.2f} °C)."
                         )
+                        if min_sep < (delta_tm * 0.7):
+                            st.warning(
+                                "Some peaks are predicted to be closer together than desired. "
+                                "You may want to increase ΔTm, adjust primer constraints, or try different targets."
+                            )
+                    else:
+                        st.info("Not enough successful designs to estimate peak separation.")
                 else:
-                    st.info("Not enough successful designs to estimate peak separation.")
+                    # For free assignment, display table
+                    df = pd.DataFrame(all_rows)
+
+                    # Sort by assigned Tm slot
+                    if "Assigned Tm slot (°C)" in df.columns:
+                        df = df.sort_values("Assigned Tm slot (°C)", na_position="last")
+
+                    st.dataframe(df, use_container_width=True)
+
+                    # Report minimal spacing between peaks if we have predictions
+                    predicted_tms_clean = sorted([tm for tm in predicted_tms if tm is not None])
+                    if len(predicted_tms_clean) >= 2:
+                        diffs = [
+                            predicted_tms_clean[i+1] - predicted_tms_clean[i]
+                            for i in range(len(predicted_tms_clean) - 1)
+                        ]
+                        min_sep = min(diffs)
+                        st.info(
+                            f"Minimum predicted peak separation: **{min_sep:.2f} °C** "
+                            f"(desired: {delta_tm:.2f} °C)."
+                        )
+                        if min_sep < (delta_tm * 0.7):
+                            st.warning(
+                                "Some peaks are predicted to be closer together than desired. "
+                                "You may want to increase ΔTm, adjust primer constraints, or try different targets."
+                            )
+                    else:
+                        st.info("Not enough successful designs to estimate peak separation.")
 
