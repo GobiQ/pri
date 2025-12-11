@@ -501,26 +501,20 @@ if mode.startswith("A)"):
                     st.dataframe(df, use_container_width=True)
                     st.success(f"Generated {len(df)} primer pairs with predicted HRM Tm values.")
                     
-                    # Visualization
+                    # Visualization - show all
                     if len(pairs) > 0:
                         st.markdown("---")
-                        st.subheader("Primer Binding Visualization")
-                        selected_idx = st.selectbox(
-                            "Select primer pair to visualize:",
-                            options=list(range(len(pairs))),
-                            format_func=lambda x: f"Pair {x+1}: {pairs[x].forward_seq} / {pairs[x].reverse_seq}",
-                        )
-                        
-                        if selected_idx < len(pairs):
-                            p = pairs[selected_idx]
-                            viz_html = visualize_primer_binding(
-                                clean_target,
-                                p.forward_seq,
-                                p.reverse_seq,
-                                forward_start=p.forward_start,
-                                product_size=p.product_size,
-                            )
-                            st.markdown(viz_html, unsafe_allow_html=True)
+                        st.subheader("Primer Binding Visualizations")
+                        for idx, p in enumerate(pairs, start=1):
+                            with st.expander(f"Pair {idx}: {p.forward_seq} / {p.reverse_seq}", expanded=(idx == 1)):
+                                viz_html = visualize_primer_binding(
+                                    clean_target,
+                                    p.forward_seq,
+                                    p.reverse_seq,
+                                    forward_start=p.forward_start,
+                                    product_size=p.product_size,
+                                )
+                                st.markdown(viz_html, unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -659,54 +653,48 @@ elif mode.startswith("C)"):
                     st.dataframe(df, use_container_width=True)
                     st.success(f"Found {len(df)} primer designs tuned toward {desired_tm:.1f} °C HRM Tm.")
                     
-                    # Visualization
+                    # Visualization - show all
                     if len(tuned) > 0:
                         st.markdown("---")
-                        st.subheader("Primer Binding Visualization")
-                        selected_idx = st.selectbox(
-                            "Select primer design to visualize:",
-                            options=list(range(len(tuned))),
-                            format_func=lambda x: f"Design {x+1}: {tuned[x]['forward_with_tail']} / {tuned[x]['reverse_with_tail']}",
-                        )
-                        
-                        if selected_idx < len(tuned):
-                            t = tuned[selected_idx]
-                            # Use stored position information
-                            if "forward_start" in t and "forward_seq" in t:
-                                viz_html = visualize_primer_binding(
-                                    clean_target,
-                                    t["forward_seq"],
-                                    t["reverse_seq"],
-                                    forward_start=t["forward_start"],
-                                    product_size=t["product_size"],
-                                    forward_tail=t["tails"][0],
-                                    reverse_tail=t["tails"][1],
-                                )
-                                st.markdown(viz_html, unsafe_allow_html=True)
-                            else:
-                                # Fallback: try to find positions by sequence matching
-                                fwd_core = t["forward_with_tail"][len(t["tails"][0]):]
-                                rev_core = t["reverse_with_tail"][len(t["tails"][1]):]
-                                f_pos = clean_target.find(fwd_core)
-                                if f_pos != -1:
-                                    rev_rc = str(Seq(rev_core).reverse_complement())
-                                    r_pos = clean_target.find(rev_rc)
-                                    if r_pos != -1:
-                                        product_size = (r_pos + len(rev_rc)) - f_pos
-                                        viz_html = visualize_primer_binding(
-                                            clean_target,
-                                            fwd_core,
-                                            rev_core,
-                                            forward_start=f_pos,
-                                            product_size=product_size,
-                                            forward_tail=t["tails"][0],
-                                            reverse_tail=t["tails"][1],
-                                        )
-                                        st.markdown(viz_html, unsafe_allow_html=True)
-                                    else:
-                                        st.warning("Could not locate reverse primer in template for visualization.")
+                        st.subheader("Primer Binding Visualizations")
+                        for idx, t in enumerate(tuned, start=1):
+                            with st.expander(f"Design {idx}: {t['forward_with_tail']} / {t['reverse_with_tail']}", expanded=(idx == 1)):
+                                # Use stored position information
+                                if "forward_start" in t and "forward_seq" in t:
+                                    viz_html = visualize_primer_binding(
+                                        clean_target,
+                                        t["forward_seq"],
+                                        t["reverse_seq"],
+                                        forward_start=t["forward_start"],
+                                        product_size=t["product_size"],
+                                        forward_tail=t["tails"][0],
+                                        reverse_tail=t["tails"][1],
+                                    )
+                                    st.markdown(viz_html, unsafe_allow_html=True)
                                 else:
-                                    st.warning("Could not locate forward primer in template for visualization.")
+                                    # Fallback: try to find positions by sequence matching
+                                    fwd_core = t["forward_with_tail"][len(t["tails"][0]):]
+                                    rev_core = t["reverse_with_tail"][len(t["tails"][1]):]
+                                    f_pos = clean_target.find(fwd_core)
+                                    if f_pos != -1:
+                                        rev_rc = str(Seq(rev_core).reverse_complement())
+                                        r_pos = clean_target.find(rev_rc)
+                                        if r_pos != -1:
+                                            product_size = (r_pos + len(rev_rc)) - f_pos
+                                            viz_html = visualize_primer_binding(
+                                                clean_target,
+                                                fwd_core,
+                                                rev_core,
+                                                forward_start=f_pos,
+                                                product_size=product_size,
+                                                forward_tail=t["tails"][0],
+                                                reverse_tail=t["tails"][1],
+                                            )
+                                            st.markdown(viz_html, unsafe_allow_html=True)
+                                        else:
+                                            st.warning("Could not locate reverse primer in template for visualization.")
+                                    else:
+                                        st.warning("Could not locate forward primer in template for visualization.")
 
 
 # -----------------------------
@@ -1172,6 +1160,27 @@ elif mode.startswith("D)"):
                         df = df.sort_values("Predicted HRM Tm (°C)", na_position="last")
 
                     st.dataframe(df, use_container_width=True)
+                    
+                    # Visualization - show all
+                    if visualization_data:
+                        st.markdown("---")
+                        st.subheader("Primer Binding Visualizations")
+                        for target_name in sorted(visualization_data.keys()):
+                            target_seq, candidate = visualization_data[target_name]
+                            with st.expander(f"Target: {target_name}", expanded=True):
+                                if "forward_start" in candidate and "forward_seq" in candidate:
+                                    viz_html = visualize_primer_binding(
+                                        target_seq,
+                                        candidate["forward_seq"],
+                                        candidate["reverse_seq"],
+                                        forward_start=candidate["forward_start"],
+                                        product_size=candidate["product_size"],
+                                        forward_tail=candidate["tails"][0],
+                                        reverse_tail=candidate["tails"][1],
+                                    )
+                                    st.markdown(viz_html, unsafe_allow_html=True)
+                                else:
+                                    st.warning("Position information not available for visualization.")
 
                     # Report minimal spacing between peaks if we have predictions
                     predicted_tms_clean = sorted([tm for tm in predicted_tms if tm is not None])
@@ -1202,30 +1211,26 @@ elif mode.startswith("D)"):
 
                     st.dataframe(df, use_container_width=True)
                     
-                    # Visualization
+                    # Visualization - show all
                     if visualization_data:
                         st.markdown("---")
                         st.subheader("Primer Binding Visualizations")
-                        selected_target = st.selectbox(
-                            "Select target to visualize:",
-                            options=list(visualization_data.keys()),
-                        )
-                        
-                        if selected_target in visualization_data:
-                            target_seq, candidate = visualization_data[selected_target]
-                            if "forward_start" in candidate and "forward_seq" in candidate:
-                                viz_html = visualize_primer_binding(
-                                    target_seq,
-                                    candidate["forward_seq"],
-                                    candidate["reverse_seq"],
-                                    forward_start=candidate["forward_start"],
-                                    product_size=candidate["product_size"],
-                                    forward_tail=candidate["tails"][0],
-                                    reverse_tail=candidate["tails"][1],
-                                )
-                                st.markdown(viz_html, unsafe_allow_html=True)
-                            else:
-                                st.warning("Position information not available for visualization.")
+                        for target_name in sorted(visualization_data.keys()):
+                            target_seq, candidate = visualization_data[target_name]
+                            with st.expander(f"Target: {target_name}", expanded=True):
+                                if "forward_start" in candidate and "forward_seq" in candidate:
+                                    viz_html = visualize_primer_binding(
+                                        target_seq,
+                                        candidate["forward_seq"],
+                                        candidate["reverse_seq"],
+                                        forward_start=candidate["forward_start"],
+                                        product_size=candidate["product_size"],
+                                        forward_tail=candidate["tails"][0],
+                                        reverse_tail=candidate["tails"][1],
+                                    )
+                                    st.markdown(viz_html, unsafe_allow_html=True)
+                                else:
+                                    st.warning("Position information not available for visualization.")
 
                     # Report minimal spacing between peaks if we have predictions
                     predicted_tms_clean = sorted([tm for tm in predicted_tms if tm is not None])
