@@ -627,16 +627,30 @@ elif mode.startswith("D)"):
     )
 
     if not free_slot_assignment:
-        anchor_idx = st.selectbox(
-            "Which target is most constrained / should act as the anchor?",
-            options=list(range(n_targets)),
-            format_func=lambda i: target_names[i] if target_names[i] else f"Target {i+1}",
+        use_anchor = st.checkbox(
+            "Use anchor target (design one target first, then space others around it)",
+            value=True,
             help=(
-                "The anchor target is the one whose amplicon Tm is least negotiable. "
-                "We'll design this first, then space other targets' Tm slots around its actual predicted Tm."
+                "If checked, one target is designed first as an anchor, and other targets "
+                "are spaced around its actual predicted Tm. If unchecked, each target is "
+                "designed independently to hit its assigned Tm slot."
             ),
         )
+        
+        if use_anchor:
+            anchor_idx = st.selectbox(
+                "Which target is most constrained / should act as the anchor?",
+                options=list(range(n_targets)),
+                format_func=lambda i: target_names[i] if target_names[i] else f"Target {i+1}",
+                help=(
+                    "The anchor target is the one whose amplicon Tm is least negotiable. "
+                    "We'll design this first, then space other targets' Tm slots around its actual predicted Tm."
+                ),
+            )
+        else:
+            anchor_idx = 0  # dummy, won't be used when no anchor
     else:
+        use_anchor = False  # not used in free-assignment mode
         anchor_idx = 0  # dummy, won't be used in free-assignment mode
 
     if st.button("Design multiplex primers", type="primary"):
@@ -784,162 +798,165 @@ elif mode.startswith("D)"):
                         })
 
                 else:
-                    # --- Fixed assignment path (original anchor-first logic) ---
-                    # --- 1) Anchor target first ---
-                    anchor_name = target_names[anchor_idx]
-                    anchor_seq = target_seqs[anchor_idx]
+                    # --- Fixed assignment path ---
+                    desired_tms_effective = target_desired_tms.copy()
+                    
+                    if use_anchor:
+                        # --- Anchor-first logic ---
+                        # --- 1) Anchor target first ---
+                        anchor_name = target_names[anchor_idx]
+                        anchor_seq = target_seqs[anchor_idx]
 
-                if not anchor_seq:
-                    st.error("The chosen anchor target has no sequence; please provide it.")
-                    st.stop()
+                        if not anchor_seq:
+                            st.error("The chosen anchor target has no sequence; please provide it.")
+                            st.stop()
 
-                # Design base primers for the anchor
-                try:
-                    base_pairs_anchor: List[PrimerPair] = designer.design_primers(
-                        anchor_seq,
-                        target_region=None,
-                        custom_params=primer3_params,
-                        add_t7_promoter=False,
-                        gene_target=f"{anchor_name} (multiplex HRM anchor)",
-                    )
-                except Exception as e:
-                    st.error(f"Primer design failed for anchor target: {e}")
-                    st.stop()
+                        # Design base primers for the anchor
+                        try:
+                            base_pairs_anchor: List[PrimerPair] = designer.design_primers(
+                                anchor_seq,
+                                target_region=None,
+                                custom_params=primer3_params,
+                                add_t7_promoter=False,
+                                gene_target=f"{anchor_name} (multiplex HRM anchor)",
+                            )
+                        except Exception as e:
+                            st.error(f"Primer design failed for anchor target: {e}")
+                            st.stop()
 
-                if not base_pairs_anchor:
-                    st.error("No primer pairs found for the anchor target with current constraints.")
-                    st.stop()
+                        if not base_pairs_anchor:
+                            st.error("No primer pairs found for the anchor target with current constraints.")
+                            st.stop()
 
-                best_anchor = None
-                # Use the assigned Tm slot for the anchor (from ladder_tms or user input)
-                desired_anchor_tm = target_desired_tms[anchor_idx]
-                for p in base_pairs_anchor:
-                    tuned = optimize_pair_for_target_tm(
-                        anchor_seq,
-                        p,
-                        target_tm=desired_anchor_tm,
-                        monovalent_mM=monovalent_mM,
-                        free_Mg_mM=free_Mg_mM,
-                        tail_penalty=tail_penalty * 2.0,  # heavier tail penalty for anchor
-                    )
-                    if tuned is None:
-                        continue
-                    if best_anchor is None or tuned["score"] < best_anchor["score"]:
-                        best_anchor = tuned
+                        best_anchor = None
+                        # Use the assigned Tm slot for the anchor (from ladder_tms or user input)
+                        desired_anchor_tm = target_desired_tms[anchor_idx]
+                        for p in base_pairs_anchor:
+                            tuned = optimize_pair_for_target_tm(
+                                anchor_seq,
+                                p,
+                                target_tm=desired_anchor_tm,
+                                monovalent_mM=monovalent_mM,
+                                free_Mg_mM=free_Mg_mM,
+                                tail_penalty=tail_penalty * 2.0,  # heavier tail penalty for anchor
+                            )
+                            if tuned is None:
+                                continue
+                            if best_anchor is None or tuned["score"] < best_anchor["score"]:
+                                best_anchor = tuned
 
-                if best_anchor is None:
-                    st.error("Could not find a suitable anchor design. Try relaxing constraints.")
-                    st.stop()
+                        if best_anchor is None:
+                            st.error("Could not find a suitable anchor design. Try relaxing constraints.")
+                            st.stop()
 
-                anchor_tm_actual = best_anchor["amplicon_tm"]
-                predicted_tms[anchor_idx] = anchor_tm_actual
+                        anchor_tm_actual = best_anchor["amplicon_tm"]
+                        predicted_tms[anchor_idx] = anchor_tm_actual
 
-                # --- 2) Use the original desired Tms that were shown in the UI ---
-                # These are the values from ladder_tms (if auto-assign) or user input
-                desired_tms_effective = target_desired_tms.copy()
-
-                # --- 3) Record anchor row first ---
-                all_rows.append({
-                    "Target": anchor_name,
-                    "Desired HRM Tm (°C)": round(desired_tms_effective[anchor_idx], 2),
-                    "Predicted HRM Tm (°C)": round(anchor_tm_actual, 2),
-                    "ΔTm (predicted − desired, °C)": round(anchor_tm_actual - desired_tms_effective[anchor_idx], 2),
-                    "Forward primer (with tail)": best_anchor["forward_with_tail"],
-                    "Reverse primer (with tail)": best_anchor["reverse_with_tail"],
-                    "5' tail F": best_anchor["tails"][0],
-                    "5' tail R": best_anchor["tails"][1],
-                    "Product size (bp)": best_anchor["product_size"],
-                    "Primer Tm F (°C)": round(best_anchor["forward_tm"], 2),
-                    "Primer Tm R (°C)": round(best_anchor["reverse_tm"], 2),
-                    "GC% F": round(best_anchor["gc_f"], 1),
-                    "GC% R": round(best_anchor["gc_r"], 1),
-                    "Primer3 penalty": round(best_anchor["penalty"], 3),
-                    "Status": "Anchor OK",
-                })
-
-                # --- 4) Now design non-anchor targets around the anchor Tm ---
-                for idx in range(n_targets):
-                    if idx == anchor_idx:
-                        continue
-
-                    name = target_names[idx]
-                    seq = target_seqs[idx]
-                    desired_tm = desired_tms_effective[idx]
-
-                    if not seq:
+                        # --- 2) Record anchor row first ---
                         all_rows.append({
-                            "Target": name,
-                            "Desired HRM Tm (°C)": round(desired_tm, 2),
-                            "Status": "No sequence provided",
+                            "Target": anchor_name,
+                            "Desired HRM Tm (°C)": round(desired_tms_effective[anchor_idx], 2),
+                            "Predicted HRM Tm (°C)": round(anchor_tm_actual, 2),
+                            "ΔTm (predicted − desired, °C)": round(anchor_tm_actual - desired_tms_effective[anchor_idx], 2),
+                            "Forward primer (with tail)": best_anchor["forward_with_tail"],
+                            "Reverse primer (with tail)": best_anchor["reverse_with_tail"],
+                            "5' tail F": best_anchor["tails"][0],
+                            "5' tail R": best_anchor["tails"][1],
+                            "Product size (bp)": best_anchor["product_size"],
+                            "Primer Tm F (°C)": round(best_anchor["forward_tm"], 2),
+                            "Primer Tm R (°C)": round(best_anchor["reverse_tm"], 2),
+                            "GC% F": round(best_anchor["gc_f"], 1),
+                            "GC% R": round(best_anchor["gc_r"], 1),
+                            "Primer3 penalty": round(best_anchor["penalty"], 3),
+                            "Status": "Anchor OK",
                         })
-                        continue
 
-                    try:
-                        base_pairs: List[PrimerPair] = designer.design_primers(
-                            seq,
-                            target_region=None,
-                            custom_params=primer3_params,
-                            add_t7_promoter=False,
-                            gene_target=f"{name} (multiplex HRM)",
-                        )
-                    except Exception as e:
-                        all_rows.append({
-                            "Target": name,
-                            "Desired HRM Tm (°C)": round(desired_tm, 2),
-                            "Status": f"Primer design failed: {e}",
-                        })
-                        continue
+                        # --- 3) Now design non-anchor targets ---
+                        target_indices = [idx for idx in range(n_targets) if idx != anchor_idx]
+                    else:
+                        # --- No anchor: design all targets independently ---
+                        target_indices = list(range(n_targets))
 
-                    if not base_pairs:
-                        all_rows.append({
-                            "Target": name,
-                            "Desired HRM Tm (°C)": round(desired_tm, 2),
-                            "Status": "No primer pairs found for this target.",
-                        })
-                        continue
+                    # --- Design all targets (non-anchor if using anchor, or all if not) ---
+                    for idx in target_indices:
+                        name = target_names[idx]
+                        seq = target_seqs[idx]
+                        desired_tm = desired_tms_effective[idx]
 
-                    best_candidate = None
-                    for p in base_pairs:
-                        tuned = optimize_pair_for_target_tm(
-                            seq,
-                            p,
-                            target_tm=desired_tm,
-                            monovalent_mM=monovalent_mM,
-                            free_Mg_mM=free_Mg_mM,
-                            tail_penalty=tail_penalty,
-                        )
-                        if tuned is None:
+                        if not seq:
+                            all_rows.append({
+                                "Target": name,
+                                "Desired HRM Tm (°C)": round(desired_tm, 2),
+                                "Status": "No sequence provided",
+                            })
                             continue
-                        if best_candidate is None or tuned["score"] < best_candidate["score"]:
-                            best_candidate = tuned
 
-                    if best_candidate is None:
+                        try:
+                            base_pairs: List[PrimerPair] = designer.design_primers(
+                                seq,
+                                target_region=None,
+                                custom_params=primer3_params,
+                                add_t7_promoter=False,
+                                gene_target=f"{name} (multiplex HRM)",
+                            )
+                        except Exception as e:
+                            all_rows.append({
+                                "Target": name,
+                                "Desired HRM Tm (°C)": round(desired_tm, 2),
+                                "Status": f"Primer design failed: {e}",
+                            })
+                            continue
+
+                        if not base_pairs:
+                            all_rows.append({
+                                "Target": name,
+                                "Desired HRM Tm (°C)": round(desired_tm, 2),
+                                "Status": "No primer pairs found for this target.",
+                            })
+                            continue
+
+                        best_candidate = None
+                        for p in base_pairs:
+                            tuned = optimize_pair_for_target_tm(
+                                seq,
+                                p,
+                                target_tm=desired_tm,
+                                monovalent_mM=monovalent_mM,
+                                free_Mg_mM=free_Mg_mM,
+                                tail_penalty=tail_penalty,
+                            )
+                            if tuned is None:
+                                continue
+                            if best_candidate is None or tuned["score"] < best_candidate["score"]:
+                                best_candidate = tuned
+
+                        if best_candidate is None:
+                            all_rows.append({
+                                "Target": name,
+                                "Desired HRM Tm (°C)": round(desired_tm, 2),
+                                "Status": "Could not hit this Tm slot.",
+                            })
+                            continue
+
+                        predicted_tms[idx] = best_candidate["amplicon_tm"]
+
                         all_rows.append({
                             "Target": name,
                             "Desired HRM Tm (°C)": round(desired_tm, 2),
-                            "Status": "Could not hit this Tm slot.",
+                            "Predicted HRM Tm (°C)": round(best_candidate["amplicon_tm"], 2),
+                            "ΔTm (predicted − desired, °C)": round(best_candidate["delta_tm"], 2),
+                            "Forward primer (with tail)": best_candidate["forward_with_tail"],
+                            "Reverse primer (with tail)": best_candidate["reverse_with_tail"],
+                            "5' tail F": best_candidate["tails"][0],
+                            "5' tail R": best_candidate["tails"][1],
+                            "Product size (bp)": best_candidate["product_size"],
+                            "Primer Tm F (°C)": round(best_candidate["forward_tm"], 2),
+                            "Primer Tm R (°C)": round(best_candidate["reverse_tm"], 2),
+                            "GC% F": round(best_candidate["gc_f"], 1),
+                            "GC% R": round(best_candidate["gc_r"], 1),
+                            "Primer3 penalty": round(best_candidate["penalty"], 3),
+                            "Status": "OK",
                         })
-                        continue
-
-                    predicted_tms[idx] = best_candidate["amplicon_tm"]
-
-                    all_rows.append({
-                        "Target": name,
-                        "Desired HRM Tm (°C)": round(desired_tm, 2),
-                        "Predicted HRM Tm (°C)": round(best_candidate["amplicon_tm"], 2),
-                        "ΔTm (predicted − desired, °C)": round(best_candidate["delta_tm"], 2),
-                        "Forward primer (with tail)": best_candidate["forward_with_tail"],
-                        "Reverse primer (with tail)": best_candidate["reverse_with_tail"],
-                        "5' tail F": best_candidate["tails"][0],
-                        "5' tail R": best_candidate["tails"][1],
-                        "Product size (bp)": best_candidate["product_size"],
-                        "Primer Tm F (°C)": round(best_candidate["forward_tm"], 2),
-                        "Primer Tm R (°C)": round(best_candidate["reverse_tm"], 2),
-                        "GC% F": round(best_candidate["gc_f"], 1),
-                        "GC% R": round(best_candidate["gc_r"], 1),
-                        "Primer3 penalty": round(best_candidate["penalty"], 3),
-                        "Status": "OK",
-                    })
 
                 # Display table (for both paths)
                 if not free_slot_assignment:
