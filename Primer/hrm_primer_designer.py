@@ -13,6 +13,10 @@ from autoprimer import PrimerDesigner, PrimerPair  # PrimerPair is your simple c
 
 import math
 
+# Instrument-specific calibration offset for HRM peaks (°C).
+# This gets updated from the Streamlit sidebar.
+INSTRUMENT_TM_OFFSET = 0.0
+
 def gc_content(seq: str) -> float:
     seq = seq.upper()
     if not seq:
@@ -22,16 +26,33 @@ def gc_content(seq: str) -> float:
 
 def rough_amp_tm(seq: str, monovalent_mM: float = 50.0, free_Mg_mM: float = 2.0) -> float:
     """
-    Coarse but fast approximation of dsDNA amplicon Tm,
-    matching the rough_amp_tm used in your multiplex app.
+    Approximate dsDNA amplicon Tm using a PCR-product formula (von Ahsen et al. 2001):
+
+        Tm_raw = 77.1 + 0.41(%GC) - 528/L + 11.7 * log10([Na+])
+
+    where [Na+] is in mol/L and L is the amplicon length in bp.
+
+    This is substantially closer to real PCR product / HRM peaks than the older
+    69.3 + 0.41*GC - 650/L + 16.6*log10([Na+]) style formula.
+
+    We then apply an instrument-specific offset (INSTRUMENT_TM_OFFSET), which you
+    can set from the sidebar to align the model to your actual HRM machine.
     """
+    # Clean + basic sanity
     seq = "".join([c for c in seq.upper() if c in "ACGT"])
-    L = max(len(seq), 1)
-    base = 69.3 + 0.41 * (gc_content(seq) * 100.0) - (650.0 / L)
-    Na = max(monovalent_mM, 1e-3) / 1000.0  # convert mM → M
-    salt = 16.6 * math.log10(Na)
-    mg_adj = 0.6 * max(free_Mg_mM, 0.0)
-    return base + salt + mg_adj
+    L = len(seq)
+    if L == 0:
+        return 0.0
+
+    gc_percent = gc_content(seq) * 100.0  # 0–100
+    # Convert monovalent salt from mM → M for the formula
+    Na_M = max(monovalent_mM, 1e-3) / 1000.0
+
+    # von Ahsen-style PCR product Tm
+    tm_raw = 77.1 + 0.41 * gc_percent - (528.0 / L) + 11.7 * math.log10(Na_M)
+
+    # For now, we fold Mg²⁺ and dye/system quirks into a single calibration offset
+    return tm_raw + INSTRUMENT_TM_OFFSET
 
 
 GC_TAILS = ["", "G", "GC", "GCG", "GCGC", "GCGCG", "GCGCGC"]
@@ -185,6 +206,23 @@ free_Mg_mM = st.sidebar.number_input(
     value=2.0,
     step=0.1,
 )
+
+# --- HRM calibration ---
+st.sidebar.markdown("#### HRM calibration")
+st.sidebar.caption(
+    "Use a known amplicon (with a measured HRM peak) to set this offset so that the "
+    "predicted Tm matches your instrument. The same offset is then applied to all designs."
+)
+offset_user = st.sidebar.number_input(
+    "Instrument Tm offset (observed − predicted, °C)",
+    min_value=-20.0,
+    max_value=20.0,
+    value=0.0,
+    step=0.5,
+)
+
+# Update the global offset used in rough_amp_tm
+INSTRUMENT_TM_OFFSET = float(offset_user)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Primer3 constraints (for auto design)")
