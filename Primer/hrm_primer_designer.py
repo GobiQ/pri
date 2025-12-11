@@ -110,6 +110,123 @@ def build_amplicon_from_primers(template: str, forward: str, reverse: str) -> Op
     return template[f_pos:end]
 
 
+def visualize_primer_binding(
+    template: str,
+    forward_seq: str,
+    reverse_seq: str,
+    forward_start: Optional[int] = None,
+    product_size: Optional[int] = None,
+    forward_tail: str = "",
+    reverse_tail: str = "",
+) -> str:
+    """
+    Create a text visualization showing primer binding positions and amplicon.
+    Returns HTML string for display in Streamlit.
+    """
+    template = clean_dna(template)
+    fwd = clean_dna(forward_seq)
+    rev = clean_dna(reverse_seq)
+    
+    if not template or not fwd or not rev:
+        return "<p>Cannot visualize: missing sequence data.</p>"
+    
+    # Find primer positions
+    if forward_start is not None and product_size is not None:
+        # Use provided positions
+        f_pos = forward_start
+        r_pos_end = forward_start + product_size
+        rev_rc = str(Seq(rev).reverse_complement())
+        r_pos = r_pos_end - len(rev_rc)
+    else:
+        # Find positions by sequence matching
+        f_pos = template.find(fwd)
+        if f_pos == -1:
+            return "<p>Cannot visualize: forward primer not found in template.</p>"
+        
+        rev_rc = str(Seq(rev).reverse_complement())
+        r_pos = template.find(rev_rc)
+        if r_pos == -1:
+            return "<p>Cannot visualize: reverse primer not found in template.</p>"
+        
+        # Ensure forward comes first
+        if r_pos < f_pos:
+            f_pos, r_pos = r_pos, f_pos
+            fwd, rev_rc = rev_rc, fwd
+        
+        r_pos_end = r_pos + len(rev_rc)
+    
+    # Determine what portion of template to show (with some context)
+    context_before = 20
+    context_after = 20
+    show_start = max(0, f_pos - context_before)
+    show_end = min(len(template), r_pos_end + context_after)
+    
+    # Extract the region to display
+    display_seq = template[show_start:show_end]
+    f_display_pos = f_pos - show_start
+    r_display_pos = r_pos - show_start
+    r_display_end = r_pos_end - show_start
+    
+    # Build HTML visualization
+    html_parts = []
+    html_parts.append("<div style='font-family: monospace; font-size: 12px; line-height: 1.6;'>")
+    html_parts.append(f"<p><strong>Template region:</strong> (positions {show_start+1}-{show_end} of {len(template)} bp)</p>")
+    
+    # Template sequence with highlighting
+    html_parts.append("<div style='background: #f0f0f0; padding: 10px; border-radius: 5px; margin: 10px 0;'>")
+    
+    # Before forward primer
+    if f_display_pos > 0:
+        html_parts.append(f"<span style='color: #666;'>{display_seq[:f_display_pos]}</span>")
+    
+    # Forward primer binding (highlighted)
+    fwd_binding = display_seq[f_display_pos:f_display_pos+len(fwd)]
+    html_parts.append(f"<span style='background: #90EE90; color: #000; font-weight: bold;'>{fwd_binding}</span>")
+    
+    # Amplicon region (between primers)
+    amp_start = f_display_pos + len(fwd)
+    amp_end = r_display_pos
+    if amp_end > amp_start:
+        amplicon = display_seq[amp_start:amp_end]
+        html_parts.append(f"<span style='background: #FFE4B5; color: #000;'>{amplicon}</span>")
+    
+    # Reverse primer binding (highlighted)
+    rev_binding = display_seq[r_display_pos:r_display_end]
+    html_parts.append(f"<span style='background: #87CEEB; color: #000; font-weight: bold;'>{rev_binding}</span>")
+    
+    # After reverse primer
+    if r_display_end < len(display_seq):
+        html_parts.append(f"<span style='color: #666;'>{display_seq[r_display_end:]}</span>")
+    
+    html_parts.append("</div>")
+    
+    # Legend and primer details
+    html_parts.append("<div style='margin: 10px 0;'>")
+    html_parts.append("<p><strong>Primers:</strong></p>")
+    html_parts.append("<ul style='margin: 5px 0; padding-left: 20px;'>")
+    
+    fwd_full = forward_tail + fwd if forward_tail else fwd
+    html_parts.append(f"<li><span style='background: #90EE90; padding: 2px 5px;'>Forward</span>: "
+                      f"<code>{fwd_full}</code> (binds at position {f_pos+1})</li>")
+    
+    rev_full = reverse_tail + rev if reverse_tail else rev
+    html_parts.append(f"<li><span style='background: #87CEEB; padding: 2px 5px;'>Reverse</span>: "
+                      f"<code>{rev_full}</code> (binds at position {r_pos+1})</li>")
+    
+    if forward_tail or reverse_tail:
+        html_parts.append(f"<li><strong>Tails:</strong> F={forward_tail or '(none)'}, R={reverse_tail or '(none)'}</li>")
+    
+    amp_len = r_pos_end - f_pos
+    html_parts.append(f"<li><strong>Amplicon:</strong> {amp_len} bp (positions {f_pos+1}-{r_pos_end})</li>")
+    
+    html_parts.append("</ul>")
+    html_parts.append("</div>")
+    
+    html_parts.append("</div>")
+    
+    return "".join(html_parts)
+
+
 def optimize_pair_for_target_tm(
     template: str,
     primer_pair: PrimerPair,
@@ -167,6 +284,9 @@ def optimize_pair_for_target_tm(
                 "gc_r": primer_pair.gc_content_r,
                 "penalty": primer_pair.penalty,
                 "gene_target": primer_pair.gene_target,
+                "forward_start": primer_pair.forward_start,  # Store for visualization
+                "forward_seq": primer_pair.forward_seq,  # Store core sequences
+                "reverse_seq": primer_pair.reverse_seq,
             }
 
             if best is None or candidate["score"] < best["score"]:
@@ -380,6 +500,27 @@ if mode.startswith("A)"):
                     df = df.sort_values("Predicted HRM Tm (°C)")
                     st.dataframe(df, use_container_width=True)
                     st.success(f"Generated {len(df)} primer pairs with predicted HRM Tm values.")
+                    
+                    # Visualization
+                    if len(pairs) > 0:
+                        st.markdown("---")
+                        st.subheader("Primer Binding Visualization")
+                        selected_idx = st.selectbox(
+                            "Select primer pair to visualize:",
+                            options=list(range(len(pairs))),
+                            format_func=lambda x: f"Pair {x+1}: {pairs[x].forward_seq} / {pairs[x].reverse_seq}",
+                        )
+                        
+                        if selected_idx < len(pairs):
+                            p = pairs[selected_idx]
+                            viz_html = visualize_primer_binding(
+                                clean_target,
+                                p.forward_seq,
+                                p.reverse_seq,
+                                forward_start=p.forward_start,
+                                product_size=p.product_size,
+                            )
+                            st.markdown(viz_html, unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -421,6 +562,16 @@ elif mode.startswith("B)"):
                     st.write(f"**Amplicon length:** {len(amp_seq)} bp")
                     st.write(f"**Predicted HRM Tm:** `{amp_tm:.2f} °C`")
                     st.code(amp_seq, language="text")
+                    
+                    # Visualization
+                    st.markdown("---")
+                    st.subheader("Primer Binding Visualization")
+                    viz_html = visualize_primer_binding(
+                        clean_target,
+                        user_fwd,
+                        user_rev,
+                    )
+                    st.markdown(viz_html, unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -507,6 +658,55 @@ elif mode.startswith("C)"):
 
                     st.dataframe(df, use_container_width=True)
                     st.success(f"Found {len(df)} primer designs tuned toward {desired_tm:.1f} °C HRM Tm.")
+                    
+                    # Visualization
+                    if len(tuned) > 0:
+                        st.markdown("---")
+                        st.subheader("Primer Binding Visualization")
+                        selected_idx = st.selectbox(
+                            "Select primer design to visualize:",
+                            options=list(range(len(tuned))),
+                            format_func=lambda x: f"Design {x+1}: {tuned[x]['forward_with_tail']} / {tuned[x]['reverse_with_tail']}",
+                        )
+                        
+                        if selected_idx < len(tuned):
+                            t = tuned[selected_idx]
+                            # Use stored position information
+                            if "forward_start" in t and "forward_seq" in t:
+                                viz_html = visualize_primer_binding(
+                                    clean_target,
+                                    t["forward_seq"],
+                                    t["reverse_seq"],
+                                    forward_start=t["forward_start"],
+                                    product_size=t["product_size"],
+                                    forward_tail=t["tails"][0],
+                                    reverse_tail=t["tails"][1],
+                                )
+                                st.markdown(viz_html, unsafe_allow_html=True)
+                            else:
+                                # Fallback: try to find positions by sequence matching
+                                fwd_core = t["forward_with_tail"][len(t["tails"][0]):]
+                                rev_core = t["reverse_with_tail"][len(t["tails"][1]):]
+                                f_pos = clean_target.find(fwd_core)
+                                if f_pos != -1:
+                                    rev_rc = str(Seq(rev_core).reverse_complement())
+                                    r_pos = clean_target.find(rev_rc)
+                                    if r_pos != -1:
+                                        product_size = (r_pos + len(rev_rc)) - f_pos
+                                        viz_html = visualize_primer_binding(
+                                            clean_target,
+                                            fwd_core,
+                                            rev_core,
+                                            forward_start=f_pos,
+                                            product_size=product_size,
+                                            forward_tail=t["tails"][0],
+                                            reverse_tail=t["tails"][1],
+                                        )
+                                        st.markdown(viz_html, unsafe_allow_html=True)
+                                    else:
+                                        st.warning("Could not locate reverse primer in template for visualization.")
+                                else:
+                                    st.warning("Could not locate forward primer in template for visualization.")
 
 
 # -----------------------------
@@ -662,6 +862,7 @@ elif mode.startswith("D)"):
             with st.spinner("Designing primers for each target and tuning HRM Tm slots..."):
                 all_rows = []
                 predicted_tms = [None] * n_targets
+                visualization_data = {}  # Store (target_name, candidate) for visualization
 
                 if free_slot_assignment:
                     # --- Free slot assignment path ---
@@ -778,6 +979,8 @@ elif mode.startswith("D)"):
 
                         assigned_tm = slot_tms[slot_idx]
                         predicted_tms[i] = candidate["amplicon_tm"]
+                        if seq:  # Only store if we have a sequence
+                            visualization_data[name] = (seq, candidate)  # Store for visualization
 
                         all_rows.append({
                             "Target": name,
@@ -851,6 +1054,7 @@ elif mode.startswith("D)"):
 
                         anchor_tm_actual = best_anchor["amplicon_tm"]
                         predicted_tms[anchor_idx] = anchor_tm_actual
+                        visualization_data[anchor_name] = (anchor_seq, best_anchor)  # Store for visualization
 
                         # --- 2) Record anchor row first ---
                         all_rows.append({
@@ -939,6 +1143,7 @@ elif mode.startswith("D)"):
                             continue
 
                         predicted_tms[idx] = best_candidate["amplicon_tm"]
+                        visualization_data[name] = (seq, best_candidate)  # Store for visualization
 
                         all_rows.append({
                             "Target": name,
@@ -996,6 +1201,31 @@ elif mode.startswith("D)"):
                         df = df.sort_values("Assigned Tm slot (°C)", na_position="last")
 
                     st.dataframe(df, use_container_width=True)
+                    
+                    # Visualization
+                    if visualization_data:
+                        st.markdown("---")
+                        st.subheader("Primer Binding Visualizations")
+                        selected_target = st.selectbox(
+                            "Select target to visualize:",
+                            options=list(visualization_data.keys()),
+                        )
+                        
+                        if selected_target in visualization_data:
+                            target_seq, candidate = visualization_data[selected_target]
+                            if "forward_start" in candidate and "forward_seq" in candidate:
+                                viz_html = visualize_primer_binding(
+                                    target_seq,
+                                    candidate["forward_seq"],
+                                    candidate["reverse_seq"],
+                                    forward_start=candidate["forward_start"],
+                                    product_size=candidate["product_size"],
+                                    forward_tail=candidate["tails"][0],
+                                    reverse_tail=candidate["tails"][1],
+                                )
+                                st.markdown(viz_html, unsafe_allow_html=True)
+                            else:
+                                st.warning("Position information not available for visualization.")
 
                     # Report minimal spacing between peaks if we have predictions
                     predicted_tms_clean = sorted([tm for tm in predicted_tms if tm is not None])
