@@ -170,15 +170,13 @@ def visualize_primer_binding(
     # Build HTML visualization
     html_parts = []
     html_parts.append("<div style='font-family: monospace; font-size: 12px; line-height: 1.6;'>")
+    
+    # Show template region info
     html_parts.append(f"<p><strong>Template region:</strong> (positions {show_start+1}-{show_end} of {len(template)} bp)</p>")
     
-    # Template sequence with highlighting
+    # Template sequence with highlighting (what's in the original template)
     html_parts.append("<div style='background: #f0f0f0; padding: 10px; border-radius: 5px; margin: 10px 0;'>")
-    
-    # Show forward tail if present (before the template sequence)
-    if forward_tail:
-        html_parts.append(f"<span style='background: #FFB6C1; color: #000; font-weight: bold; border: 1px dashed #FF69B4;' title='5&apos; tail (not part of template)'>{forward_tail}</span>")
-        html_parts.append("<span style='color: #999; font-size: 10px;'>→</span>")
+    html_parts.append("<p style='margin: 0 0 8px 0; font-size: 11px; color: #666;'><strong>Original template sequence:</strong></p>")
     
     # Before forward primer
     if f_display_pos > 0:
@@ -203,12 +201,34 @@ def visualize_primer_binding(
     if r_display_end < len(display_seq):
         html_parts.append(f"<span style='color: #666;'>{display_seq[r_display_end:]}</span>")
     
-    # Show reverse tail if present (after the template sequence)
-    if reverse_tail:
-        html_parts.append("<span style='color: #999; font-size: 10px;'>→</span>")
-        html_parts.append(f"<span style='background: #FFB6C1; color: #000; font-weight: bold; border: 1px dashed #FF69B4;' title='5&apos; tail (not part of template)'>{reverse_tail}</span>")
-    
     html_parts.append("</div>")
+    
+    # Show final PCR product (including tails) if tails are present
+    if forward_tail or reverse_tail:
+        html_parts.append("<div style='background: #E6F3FF; padding: 10px; border-radius: 5px; margin: 10px 0; border: 2px solid #4A90E2;'>")
+        html_parts.append("<p style='margin: 0 0 8px 0; font-size: 11px; color: #4A90E2;'><strong>Final PCR product (includes tails):</strong></p>")
+        
+        # Forward tail (attached to 5' end of forward primer)
+        if forward_tail:
+            html_parts.append(f"<span style='background: #FFB6C1; color: #000; font-weight: bold; border: 2px solid #FF69B4; padding: 2px;' title='5&apos; tail attached to forward primer'>{forward_tail}</span>")
+        
+        # Forward primer binding region
+        html_parts.append(f"<span style='background: #90EE90; color: #000; font-weight: bold;'>{fwd_binding}</span>")
+        
+        # Amplicon region (between primers)
+        if amp_end > amp_start:
+            html_parts.append(f"<span style='background: #FFE4B5; color: #000;'>{amplicon}</span>")
+        
+        # Reverse primer binding region
+        html_parts.append(f"<span style='background: #87CEEB; color: #000; font-weight: bold;'>{rev_binding}</span>")
+        
+        # Reverse tail (attached to 5' end of reverse primer)
+        if reverse_tail:
+            html_parts.append(f"<span style='background: #FFB6C1; color: #000; font-weight: bold; border: 2px solid #FF69B4; padding: 2px;' title='5&apos; tail attached to reverse primer'>{reverse_tail}</span>")
+        
+        total_amp_len = len(forward_tail) + (r_pos_end - f_pos) + len(reverse_tail)
+        html_parts.append(f"<p style='margin: 8px 0 0 0; font-size: 11px; color: #4A90E2;'><strong>Total product length:</strong> {total_amp_len} bp (template: {r_pos_end - f_pos} bp + tails: {len(forward_tail) + len(reverse_tail)} bp)</p>")
+        html_parts.append("</div>")
     
     # Legend and primer details
     html_parts.append("<div style='margin: 10px 0;'>")
@@ -226,13 +246,17 @@ def visualize_primer_binding(
                       f"<code>{rev_full}</code>{tail_info_r} (binds at position {r_pos+1})</li>")
     
     if forward_tail or reverse_tail:
-        html_parts.append(f"<li><strong>Tails (5&apos; extensions):</strong> Forward={forward_tail or '(none)'}, Reverse={reverse_tail or '(none)'} "
-                          f"<span style='color: #666; font-size: 11px;'>(shown in pink with dashed border in sequence above)</span></li>")
+        html_parts.append(f"<li><strong>Tails (5&apos; primer extensions):</strong> Forward={forward_tail or '(none)'}, Reverse={reverse_tail or '(none)'}</li>")
+        html_parts.append(f"<li style='color: #666; font-size: 11px; margin-top: 5px;'><em>Tails are attached to the 5&apos; end of primers and become part of the final PCR product. "
+                         f"The final amplicon = {forward_tail or ''}[forward primer]{amplicon if amp_end > amp_start else ''}[reverse primer]{reverse_tail or ''}</em></li>")
     else:
         html_parts.append("<li><strong>Tails:</strong> None</li>")
     
-    amp_len = r_pos_end - f_pos
-    html_parts.append(f"<li><strong>Amplicon:</strong> {amp_len} bp (positions {f_pos+1}-{r_pos_end})</li>")
+    template_amp_len = r_pos_end - f_pos
+    final_amp_len = template_amp_len + len(forward_tail) + len(reverse_tail)
+    html_parts.append(f"<li><strong>Template region:</strong> {template_amp_len} bp (positions {f_pos+1}-{r_pos_end})</li>")
+    if forward_tail or reverse_tail:
+        html_parts.append(f"<li><strong>Final PCR product:</strong> {final_amp_len} bp (template + tails)</li>")
     
     html_parts.append("</ul>")
     html_parts.append("</div>")
