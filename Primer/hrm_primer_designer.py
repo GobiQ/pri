@@ -175,28 +175,38 @@ def visualize_primer_binding(
     # Template sequence with highlighting
     html_parts.append("<div style='background: #f0f0f0; padding: 10px; border-radius: 5px; margin: 10px 0;'>")
     
+    # Show forward tail if present (before the template sequence)
+    if forward_tail:
+        html_parts.append(f"<span style='background: #FFB6C1; color: #000; font-weight: bold; border: 1px dashed #FF69B4;' title='5&apos; tail (not part of template)'>{forward_tail}</span>")
+        html_parts.append("<span style='color: #999; font-size: 10px;'>→</span>")
+    
     # Before forward primer
     if f_display_pos > 0:
         html_parts.append(f"<span style='color: #666;'>{display_seq[:f_display_pos]}</span>")
     
     # Forward primer binding (highlighted)
     fwd_binding = display_seq[f_display_pos:f_display_pos+len(fwd)]
-    html_parts.append(f"<span style='background: #90EE90; color: #000; font-weight: bold;'>{fwd_binding}</span>")
+    html_parts.append(f"<span style='background: #90EE90; color: #000; font-weight: bold;' title='Forward primer binding region'>{fwd_binding}</span>")
     
     # Amplicon region (between primers)
     amp_start = f_display_pos + len(fwd)
     amp_end = r_display_pos
     if amp_end > amp_start:
         amplicon = display_seq[amp_start:amp_end]
-        html_parts.append(f"<span style='background: #FFE4B5; color: #000;'>{amplicon}</span>")
+        html_parts.append(f"<span style='background: #FFE4B5; color: #000;' title='Amplicon region'>{amplicon}</span>")
     
     # Reverse primer binding (highlighted)
     rev_binding = display_seq[r_display_pos:r_display_end]
-    html_parts.append(f"<span style='background: #87CEEB; color: #000; font-weight: bold;'>{rev_binding}</span>")
+    html_parts.append(f"<span style='background: #87CEEB; color: #000; font-weight: bold;' title='Reverse primer binding region'>{rev_binding}</span>")
     
     # After reverse primer
     if r_display_end < len(display_seq):
         html_parts.append(f"<span style='color: #666;'>{display_seq[r_display_end:]}</span>")
+    
+    # Show reverse tail if present (after the template sequence)
+    if reverse_tail:
+        html_parts.append("<span style='color: #999; font-size: 10px;'>→</span>")
+        html_parts.append(f"<span style='background: #FFB6C1; color: #000; font-weight: bold; border: 1px dashed #FF69B4;' title='5&apos; tail (not part of template)'>{reverse_tail}</span>")
     
     html_parts.append("</div>")
     
@@ -206,15 +216,20 @@ def visualize_primer_binding(
     html_parts.append("<ul style='margin: 5px 0; padding-left: 20px;'>")
     
     fwd_full = forward_tail + fwd if forward_tail else fwd
+    tail_info_f = f" <span style='color: #FF69B4; font-weight: bold;'>(tail: {forward_tail})</span>" if forward_tail else ""
     html_parts.append(f"<li><span style='background: #90EE90; padding: 2px 5px;'>Forward</span>: "
-                      f"<code>{fwd_full}</code> (binds at position {f_pos+1})</li>")
+                      f"<code>{fwd_full}</code>{tail_info_f} (binds at position {f_pos+1})</li>")
     
     rev_full = reverse_tail + rev if reverse_tail else rev
+    tail_info_r = f" <span style='color: #FF69B4; font-weight: bold;'>(tail: {reverse_tail})</span>" if reverse_tail else ""
     html_parts.append(f"<li><span style='background: #87CEEB; padding: 2px 5px;'>Reverse</span>: "
-                      f"<code>{rev_full}</code> (binds at position {r_pos+1})</li>")
+                      f"<code>{rev_full}</code>{tail_info_r} (binds at position {r_pos+1})</li>")
     
     if forward_tail or reverse_tail:
-        html_parts.append(f"<li><strong>Tails:</strong> F={forward_tail or '(none)'}, R={reverse_tail or '(none)'}</li>")
+        html_parts.append(f"<li><strong>Tails (5&apos; extensions):</strong> Forward={forward_tail or '(none)'}, Reverse={reverse_tail or '(none)'} "
+                          f"<span style='color: #666; font-size: 11px;'>(shown in pink with dashed border in sequence above)</span></li>")
+    else:
+        html_parts.append("<li><strong>Tails:</strong> None</li>")
     
     amp_len = r_pos_end - f_pos
     html_parts.append(f"<li><strong>Amplicon:</strong> {amp_len} bp (positions {f_pos+1}-{r_pos_end})</li>")
